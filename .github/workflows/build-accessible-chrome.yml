@@ -1,0 +1,94 @@
+name: Build accessible ImprovedTube for Chrome
+
+on:
+  push:
+    branches:
+      - build/chrome-accessible-es-unified
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package-chrome:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout the reproducible integrated source
+        uses: actions/checkout@v4
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify extension, accessible controls, Spanish and MV3
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          root=Path('.')
+          manifest=json.loads((root/'manifest.json').read_text(encoding='utf-8'))
+          assert manifest['manifest_version']==3
+          assert manifest['background']['service_worker']=='background.js'
+          assert 'scripts' not in manifest['background']
+          en=json.loads((root/'_locales/en/messages.json').read_text(encoding='utf-8'))
+          es=json.loads((root/'_locales/es/messages.json').read_text(encoding='utf-8'))
+          missing=[key for key in en if not isinstance(es.get(key),dict) or not str(es[key].get('message','')).strip()]
+          assert not missing, f'Missing Spanish messages: {missing[:20]}'
+          assert 'hideHomeCategoryBar' in en and 'hideHomeCategoryBar' in es
+          general=(root/'menu/skeleton-parts/general.js').read_text(encoding='utf-8')
+          assert "text: 'hideWatchLaterVideos'" in general
+          assert "storage: 'hide_home_category_bar'" in general
+          css=(root/'js&css/extension/www.youtube.com/general/general.css').read_text(encoding='utf-8')
+          assert 'it-hide-home-category-bar' in css
+          for file in ('menu/accessibility.js','js&css/web-accessible/accessibility.js','menu/index.js'):
+              assert (root/file).is_file(),file
+          for file in ('menu/index.html','menu/sidepanel.html'):
+              assert 'accessibility.js' in (root/file).read_text(encoding='utf-8')
+          resources=[r for group in manifest['web_accessible_resources'] for r in group.get('resources',[])]
+          assert 'js&css/web-accessible/accessibility.js' in resources
+          assert 'js&css/web-accessible/accessibility.js' in (root/'js&css/extension/init.js').read_text(encoding='utf-8')
+          paths=[]
+          for block in manifest.get('content_scripts',[]):
+              paths+=block.get('js',[])+block.get('css',[])
+          paths+=resources
+          paths+=list(manifest.get('background',{}).values())
+          paths+=[manifest['action']['default_popup']]
+          for path in paths:
+              if isinstance(path,str) and not any(ch in path for ch in '*?'):
+                  assert (root/path).is_file(),f'Missing manifest asset: {path}'
+          print(f'PASS: {len(en)} English messages covered in Spanish; MV3 and accessibility wiring verified')
+          PY
+      - name: Check JavaScript syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          find menu 'js&css' -type f -name '*.js' -print0 | while IFS= read -r -d '' file; do
+            node --check "$file"
+          done
+      - name: Build installation ZIP with manifest at root
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import pathlib,zipfile
+          root=pathlib.Path('.')
+          ignored={'.git','.github','.idea','tests','build','node_modules'}
+          name='ImprovedTube-Accesible-Chrome.zip'
+          with zipfile.ZipFile(name,'w',compression=zipfile.ZIP_DEFLATED,compresslevel=9) as z:
+              for p in sorted(root.rglob('*')):
+                  if not p.is_file() or any(s in ignored for s in p.parts) or p.name==name or p.name.startswith('.'):
+                      continue
+                  z.write(p,p.as_posix())
+          with zipfile.ZipFile(name) as z:
+              assert z.testzip() is None
+              assert 'manifest.json' in z.namelist()
+              print(f'PASS: {len(z.namelist())} runtime/package files in {name}')
+          PY
+      - name: Upload installable Chrome ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: ImprovedTube-Accesible-Chrome
+          path: ImprovedTube-Accesible-Chrome.zip
+          if-no-files-found: error
+          retention-days: 30
