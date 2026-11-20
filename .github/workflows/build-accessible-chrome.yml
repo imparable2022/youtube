@@ -15,10 +15,64 @@ jobs:
     steps:
       - name: Checkout the reproducible integrated source
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Verify every integration against our GitHub PR source
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, re, subprocess
+          from pathlib import Path
+          def git_blob(path):
+              return subprocess.check_output(['git','hash-object',path],text=True).strip()
+          def at(commit,path):
+              return subprocess.check_output(['git','show',f'{commit}:{path}']).decode('utf-8')
+          def require_same(path, sha):
+              actual=git_blob(path)
+              assert actual==sha, f'{path}: SHA does not match our PR ({actual} != {sha})'
+          # All accessibility code and menu integration must match our own
+          # final stacked PR #4335 exactly (which includes #4332-#4334).
+          expected={
+            'menu/accessibility.js':'824983fc16a6595ae758e6fe2110809b778fc552',
+            'menu/index.html':'b0dd7708b43c3005fd8fbf0ef6b1aad11ad756b1',
+            'menu/sidepanel.html':'d00749e35bf787b4e482ad7f497c83694cd2f0f0',
+            'menu/index.js':'477278f4d7f2241c227046a841aea739dfb18115',
+            'menu/satus.js':'bff66e7236f2a29872272417d58ab373a5c67c23',
+            'js&css/extension/init.js':'051f3f89953b16eb67e5026a73a74f43e13dc278',
+            'js&css/web-accessible/accessibility.js':'2dbcbb06c241475cf4bb56bb881a3ca8e7edb1e4',
+            'js&css/web-accessible/init.js':'eeda0623f2181e984ae9608aacf7e16f2b960254',
+            'js&css/web-accessible/www.youtube.com/appearance.js':'6f8a7d3a883d368e36d0b52856aed1413b0e248a',
+            'js&css/web-accessible/www.youtube.com/shortcuts.js':'272cb2d3c808b964177f365f994a189b602d9ccf',
+            'menu/skeleton-parts/appearance.js':'c146afe7ff4bfe1d7783b776e108c17ddf0bca8b',
+            'menu/skeleton-parts/player.js':'08725c03a1946a6738c0e6fbe9300a2d455c8179',
+            'menu/skeleton-parts/settings.js':'1a8aa51e387c72304066fef18431eb36a0f3dd48',
+            '_locales/en/messages.json':'1acc2a625be1ab633d15e3ab4a1e613cd2fc25cc',
+            'js&css/extension/www.youtube.com/general/general.css':'0d350b758d40c01a6bc1da192d922de2ef419602',
+          }
+          for path,sha in expected.items(): require_same(path,sha)
+          # Chromium-only MV3 change: exact #4335 manifest minus legacy scripts.
+          manifest=at('cc797df8272e7a3039523b21f63cebbd91470ffc','manifest.json')
+          manifest=re.sub(r',\s*"scripts"\s*:\s*\[\s*"background\.js"\s*\]','',manifest,count=1)
+          assert Path('manifest.json').read_text(encoding='utf-8')==manifest, 'Unexpected manifest changes'
+          # General settings: exactly our merged PR #4336 + the switch of #4339.
+          general=at('a6407a0143ead49e7227cb45cd4f078418d5771c','menu/skeleton-parts/general.js')
+          anchor="\t\t\t\tleft: {"
+          insertion="\t\t\t\thide_home_category_bar: {\n\t\t\t\t\tcomponent: 'switch',\n\t\t\t\t\ttext: 'hideHomeCategoryBar',\n\t\t\t\t\tstorage: 'hide_home_category_bar'\n\t\t\t\t},\n"
+          assert general.count(anchor)==1, 'Cannot reproduce home category insertion'
+          assert Path('menu/skeleton-parts/general.js').read_text(encoding='utf-8')==general.replace(anchor,insertion+anchor), 'Unexpected general settings changes'
+          # Spanish: complete #4337 translations plus one optional #4339 label.
+          translated=json.loads(at('c9c741d241e9d0a103b810b6c6166cf2b7519c8e','_locales/es/messages.json'))
+          optional=json.loads(at('6932ef9535714f2365f8c6af66294d9682acb5af','_locales/es/messages.json'))
+          translated['hideHomeCategoryBar']=optional['hideHomeCategoryBar']
+          actual=json.loads(Path('_locales/es/messages.json').read_text(encoding='utf-8'))
+          assert actual==translated, 'Spanish translations differ from PRs #4337 and #4339'
+          print(f'PASS: {len(expected)} exact Git blobs + 3 reproducible PR merges')
+          PY
       - name: Verify extension, accessible controls, Spanish and MV3
         shell: bash
         run: |
