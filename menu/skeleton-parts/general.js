@@ -300,11 +300,6 @@ extension.skeleton.main.layers.section.general = {
 					text: 'squaredThumbnails',
 					tags: 'thumbnail square radius rounded corners'
 				},
-				blur_thumbnails: {
-					component: 'switch',
-					text: 'blurThumbnails',
-					tags: 'thumbnail blur privacy hide spoiler'
-				},
 				thumbnails_quality: {
 					component: 'select',
 					text: 'thumbnailsQuality',
